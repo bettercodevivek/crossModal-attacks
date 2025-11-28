@@ -63,7 +63,7 @@ crossmodal-attacks/
 ### 1️. Clone the repository
 
 ```bash
-git clone https://github.com/<your-username>/crossmodal-attacks
+git clone https://github.com/bettercodevivek/crossModal-attacks.git
 cd crossmodal-attacks
 
 ```
