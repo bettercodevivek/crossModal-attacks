@@ -1,224 +1,390 @@
-# attack_demo.py
+"""
+Main script for cross-modal adversarial attack robustness testing.
+
+Usage:
+    python demo_attack.py --attack patch
+    python demo_attack.py --attack fgsm
+    python demo_attack.py --attack pgd
+"""
 import os
-import random
-from glob import glob
-from PIL import Image
+import argparse
 import numpy as np
 import torch
-from torch import nn
-from torchvision import transforms
-from transformers import CLIPProcessor, CLIPModel
-from tqdm import tqdm
 import matplotlib.pyplot as plt
+from transformers import CLIPProcessor, CLIPModel
 
-# --------- CONFIG ----------
-DATA_DIR = "data/images"       # training images
-HOLDOUT_DIR = "data/holdout"   # evaluation images (unseen)
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 8
-PATCH_SIZE = 100
-PATCH_LOCATION = "random"      # "topleft" or "random"
-STEPS = 800
-LR = 0.1
-TARGET_TEXT = "a photo of a banana"
-CANDIDATE_TEXTS = [
-    "a photo of a dog",
-    "a photo of a cat",
-    "a photo of a person",
-    "a photo of a car",
-    "a photo of a banana"
-]
-SAVE_DIR = "output"
-os.makedirs(SAVE_DIR, exist_ok=True)
-# ---------------------------
+from config import Config
+from utils import get_device, load_image_paths, load_image_tensors
+from attacks import PatchAttack, FGSMAttack, PGDAttack
+from evaluation.robustness_evaluator import RobustnessEvaluator
+from evaluation.metrics import compute_similarity
+from visualization.visualize_results import visualize_attack_results
 
-print("\n===============================")
-print("CROSS-MODAL ADVERSARIAL ATTACK DEMO")
-print("===============================\n")
 
-print(f" Device selected: {DEVICE.upper()}")
-print("This script will generate a UNIVERSAL adversarial patch that can fool CLIP.")
-print("Once trained, applying this patch on ANY image will cause CLIP to misclassify it")
-print(f"as the target caption: \"{TARGET_TEXT}\".\n")
+def load_clip_model(device=None):
+    """
+    Load CLIP model and processor.
+    
+    Args:
+        device: Device to load on (auto-detected if None)
+        
+    Returns:
+        model, processor tuple
+    """
+    device = device or get_device()
+    print(f"Loading CLIP model on {device.upper()}...")
+    model = CLIPModel.from_pretrained(Config.CLIP_MODEL).to(device)
+    processor = CLIPProcessor.from_pretrained(Config.CLIP_MODEL)
+    print("Model loaded successfully.\n")
+    return model, processor
 
-print(" This demonstrates a **cross-modal attack** because:")
-print("- We perturb the IMAGE modality")
-print("- And it causes errors in the LANGUAGE output of CLIP.\n")
 
-print("Loading model and processor... (first time may take a minute)\n")
+def run_patch_attack(model, processor, train_paths, eval_paths, device):
+    """
+    Run universal adversarial patch attack.
+    
+    Args:
+        model: CLIP model
+        processor: CLIP processor
+        train_paths: Training image paths
+        eval_paths: Evaluation image paths
+        device: Device to run on
+        
+    Returns:
+        Results dictionary and images
+    """
+    print("\n" + "="*50)
+    print("UNIVERSAL ADVERSARIAL PATCH ATTACK")
+    print("="*50 + "\n")
+    
+    # Load training images
+    print(f"Loading {len(train_paths)} training images...")
+    train_tensors = load_image_tensors(train_paths, device)
+    
+    # Initialize patch attack
+    patch_attack = PatchAttack(model, processor, Config.TARGET_TEXT, device)
+    
+    # Generate patch
+    print(f"\nGenerating universal patch (this may take a few minutes)...")
+    print(f"Patch size: {Config.PATCH_SIZE}x{Config.PATCH_SIZE}")
+    print(f"Training steps: {Config.PATCH_STEPS}")
+    print(f"Target caption: '{Config.TARGET_TEXT}'\n")
+    
+    patch = patch_attack.generate_patch(
+        train_tensors,
+        patch_size=Config.PATCH_SIZE,
+        steps=Config.PATCH_STEPS,
+        batch_size=Config.PATCH_BATCH_SIZE,
+        lr=Config.PATCH_LR,
+        patch_location=Config.PATCH_LOCATION
+    )
+    
+    # Save patch
+    patch_img = (patch.detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+    patch_path = os.path.join(Config.OUTPUT_DIR, "universal_patch.png")
+    os.makedirs(Config.OUTPUT_DIR, exist_ok=True)
+    plt.imsave(patch_path, patch_img)
+    print(f"Saved patch to: {patch_path}\n")
+    
+    # Evaluate on holdout images
+    if len(eval_paths) == 0:
+        print("No evaluation images found. Skipping evaluation.")
+        return None, None, None
+    
+    print(f"Evaluating on {len(eval_paths)} holdout images...")
+    eval_tensors = load_image_tensors(eval_paths, device)
+    
+    # Apply patch to evaluation images
+    original_images = torch.stack(eval_tensors).to(device)
+    adversarial_images = []
+    
+    for img in eval_tensors:
+        img_batch = img.unsqueeze(0).to(device)
+        patched = patch_attack.apply_patch(img_batch, patch, Config.PATCH_LOCATION)
+        adversarial_images.append(patched.squeeze(0).cpu())
+    
+    adversarial_images = torch.stack(adversarial_images).to(device)
+    
+    # Compute metrics
+    print("Computing metrics...")
+    orig_sims = compute_similarity(model, processor, original_images, Config.TARGET_TEXT, device)
+    adv_sims = compute_similarity(model, processor, adversarial_images, Config.TARGET_TEXT, device)
+    
+    # Calculate ASR
+    successful = adv_sims > orig_sims
+    asr = successful.sum() / len(successful) if len(successful) > 0 else 0.0
+    conf_shift = float((adv_sims - orig_sims).mean())
+    robustness = 1.0 - asr
+    
+    results = {
+        'attack': 'PatchAttack',
+        'asr': float(asr),
+        'avg_confidence_shift': conf_shift,
+        'robustness_score': robustness,
+        'num_images': len(eval_paths)
+    }
+    
+    return results, original_images.cpu(), adversarial_images.cpu()
 
-# load CLIP
-model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(DEVICE)
-processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
-# transform
-preprocess = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-])
+def run_fgsm_attack(model, processor, eval_paths, device):
+    """
+    Run FGSM attack.
+    
+    Args:
+        model: CLIP model
+        processor: CLIP processor
+        eval_paths: Evaluation image paths
+        device: Device to run on
+        
+    Returns:
+        Results dictionary and images
+    """
+    print("\n" + "="*50)
+    print("FGSM ATTACK")
+    print("="*50 + "\n")
+    
+    if len(eval_paths) == 0:
+        print("No evaluation images found.")
+        return None, None, None
+    
+    # Initialize FGSM attack
+    fgsm_attack = FGSMAttack(model, processor, Config.TARGET_TEXT, device)
+    
+    print(f"Running FGSM attack on {len(eval_paths)} images...")
+    print(f"Epsilon: {Config.FGSM_EPSILON}")
+    print(f"Target caption: '{Config.TARGET_TEXT}'\n")
+    
+    # Load and process images in batches
+    eval_tensors = load_image_tensors(eval_paths, device)
+    original_images = torch.stack(eval_tensors).to(device)
+    
+    # Generate adversarial examples
+    adversarial_images = fgsm_attack.attack(original_images, Config.FGSM_EPSILON)
+    
+    # Compute metrics
+    print("Computing metrics...")
+    orig_sims = compute_similarity(model, processor, original_images, Config.TARGET_TEXT, device)
+    adv_sims = compute_similarity(model, processor, adversarial_images, Config.TARGET_TEXT, device)
+    
+    # Calculate metrics
+    successful = adv_sims > orig_sims
+    asr = successful.sum() / len(successful) if len(successful) > 0 else 0.0
+    conf_shift = float((adv_sims - orig_sims).mean())
+    robustness = 1.0 - asr
+    
+    results = {
+        'attack': 'FGSMAttack',
+        'asr': float(asr),
+        'avg_confidence_shift': conf_shift,
+        'robustness_score': robustness,
+        'num_images': len(eval_paths)
+    }
+    
+    return results, original_images.cpu(), adversarial_images.cpu()
 
-# helper to load paths
-def load_image_paths(folder):
-    exts = ("*.jpg","*.jpeg","*.png","*.bmp")
-    files = []
-    for e in exts:
-        files += glob(os.path.join(folder, e))
-    return sorted(files)
 
-train_paths = load_image_paths(DATA_DIR)
-hold_paths = load_image_paths(HOLDOUT_DIR)
+def run_pgd_attack(model, processor, eval_paths, device):
+    """
+    Run PGD attack.
+    
+    Args:
+        model: CLIP model
+        processor: CLIP processor
+        eval_paths: Evaluation image paths
+        device: Device to run on
+        
+    Returns:
+        Results dictionary and images
+    """
+    print("\n" + "="*50)
+    print("PGD ATTACK")
+    print("="*50 + "\n")
+    
+    if len(eval_paths) == 0:
+        print("No evaluation images found.")
+        return None, None, None
+    
+    # Initialize PGD attack
+    pgd_attack = PGDAttack(model, processor, Config.TARGET_TEXT, device)
+    
+    print(f"Running PGD attack on {len(eval_paths)} images...")
+    print(f"Epsilon: {Config.PGD_EPSILON}")
+    print(f"Steps: {Config.PGD_STEPS}")
+    print(f"Alpha: {Config.PGD_ALPHA}")
+    print(f"Target caption: '{Config.TARGET_TEXT}'\n")
+    
+    # Load and process images in batches
+    eval_tensors = load_image_tensors(eval_paths, device)
+    original_images = torch.stack(eval_tensors).to(device)
+    
+    # Generate adversarial examples
+    adversarial_images = pgd_attack.attack(
+        original_images, 
+        Config.PGD_EPSILON, 
+        Config.PGD_STEPS, 
+        Config.PGD_ALPHA
+    )
+    
+    # Compute metrics
+    print("Computing metrics...")
+    orig_sims = compute_similarity(model, processor, original_images, Config.TARGET_TEXT, device)
+    adv_sims = compute_similarity(model, processor, adversarial_images, Config.TARGET_TEXT, device)
+    
+    # Calculate metrics
+    successful = adv_sims > orig_sims
+    asr = successful.sum() / len(successful) if len(successful) > 0 else 0.0
+    conf_shift = float((adv_sims - orig_sims).mean())
+    robustness = 1.0 - asr
+    
+    results = {
+        'attack': 'PGDAttack',
+        'asr': float(asr),
+        'avg_confidence_shift': conf_shift,
+        'robustness_score': robustness,
+        'num_images': len(eval_paths)
+    }
+    
+    return results, original_images.cpu(), adversarial_images.cpu()
 
-if len(train_paths) == 0:
-    raise SystemExit("❌ ERROR: No images found in data/images. Add images and re-run.")
 
-print(f" Training images loaded: {len(train_paths)}")
-print(f" Holdout images loaded: {len(hold_paths)}\n")
+def save_results(results, results_dir=None):
+    """
+    Save results to JSON file.
+    
+    Args:
+        results: Results dictionary
+        results_dir: Directory to save results (default from Config)
+    """
+    import json
+    
+    results_dir = results_dir or Config.RESULTS_DIR
+    os.makedirs(results_dir, exist_ok=True)
+    
+    results_file = os.path.join(results_dir, 'metrics.json')
+    
+    # Load existing results if any
+    all_results = []
+    if os.path.exists(results_file):
+        with open(results_file, 'r') as f:
+            all_results = json.load(f)
+    
+    # Append new results
+    all_results.append(results)
+    
+    # Save
+    with open(results_file, 'w') as f:
+        json.dump(all_results, f, indent=2)
+    
+    print(f"\nResults saved to {results_file}")
 
-print("📌 Candidate captions CLIP will choose from:")
-for i, cap in enumerate(CANDIDATE_TEXTS, 1):
-    print(f"   {i}. {cap}")
-print(f"\n Target caption index: {CANDIDATE_TEXTS.index(TARGET_TEXT)}")
-print(f" We will FORCE CLIP to choose: \"{TARGET_TEXT}\"\n")
 
-# open + preprocess image
-def open_and_preprocess(path):
-    img = Image.open(path).convert("RGB")
-    return preprocess(img)
+def main():
+    """Main function."""
+    parser = argparse.ArgumentParser(
+        description='Cross-Modal Adversarial Attack Robustness Testing'
+    )
+    parser.add_argument(
+        '--attack',
+        type=str,
+        choices=['patch', 'fgsm', 'pgd'],
+        required=True,
+        help='Attack method to use'
+    )
+    parser.add_argument(
+        '--train_dir',
+        type=str,
+        default=None,
+        help='Training image directory (required for patch attack)'
+    )
+    parser.add_argument(
+        '--eval_dir',
+        type=str,
+        default=None,
+        help='Evaluation image directory'
+    )
+    
+    args = parser.parse_args()
+    
+    # Ensure directories exist
+    Config.ensure_dirs()
+    
+    # Print header
+    print("\n" + "="*50)
+    print("CROSS-MODAL ADVERSARIAL ATTACK FRAMEWORK")
+    print("="*50 + "\n")
+    print("This framework tests robustness of CLIP to cross-modal attacks.")
+    print("Attacks perturb images to manipulate text-based predictions.\n")
+    
+    # Get device
+    device = get_device()
+    print(f"Device: {device.upper()}\n")
+    
+    # Load model
+    model, processor = load_clip_model(device)
+    
+    # Determine data directories
+    train_dir = args.train_dir or Config.DATA_DIR
+    eval_dir = args.eval_dir or Config.HOLDOUT_DIR
+    
+    # Load image paths
+    train_paths = load_image_paths(train_dir)
+    eval_paths = load_image_paths(eval_dir)
+    
+    if args.attack == 'patch':
+        if len(train_paths) == 0:
+            raise SystemExit(f"❌ ERROR: No training images found in {train_dir}")
+        results, orig_imgs, adv_imgs = run_patch_attack(
+            model, processor, train_paths, eval_paths, device
+        )
+    elif args.attack == 'fgsm':
+        results, orig_imgs, adv_imgs = run_fgsm_attack(
+            model, processor, eval_paths, device
+        )
+    elif args.attack == 'pgd':
+        results, orig_imgs, adv_imgs = run_pgd_attack(
+            model, processor, eval_paths, device
+        )
+    else:
+        raise ValueError(f"Unknown attack: {args.attack}")
+    
+    if results is None:
+        print("\nNo results to save.")
+        return
+    
+    # Print results
+    print("\n" + "="*50)
+    print("ATTACK RESULTS")
+    print("="*50 + "\n")
+    print(f"Attack method: {results['attack']}")
+    print(f"Attack Success Rate (ASR): {results['asr']*100:.2f}%")
+    print(f"Average confidence shift: {results['avg_confidence_shift']:.4f}")
+    print(f"Robustness score: {results['robustness_score']:.4f}")
+    print(f"Number of images: {results['num_images']}\n")
+    
+    # Save results
+    save_results(results)
+    
+    # Generate visualizations
+    if orig_imgs is not None and adv_imgs is not None:
+        print("\nGenerating visualizations...")
+        orig_sims = compute_similarity(model, processor, orig_imgs.to(device), Config.TARGET_TEXT, device)
+        adv_sims = compute_similarity(model, processor, adv_imgs.to(device), Config.TARGET_TEXT, device)
+        
+        visualize_attack_results(
+            orig_imgs,
+            adv_imgs,
+            orig_sims,
+            adv_sims,
+            Config.TARGET_TEXT,
+            save_dir=Config.RESULTS_IMAGES_DIR,
+            max_images=8
+        )
+    
+    print("\n" + "="*50)
+    print("EVALUATION COMPLETE")
+    print("="*50 + "\n")
 
-train_tensors = [open_and_preprocess(p) for p in train_paths]
-hold_tensors = [open_and_preprocess(p) for p in hold_paths] if len(hold_paths) > 0 else []
 
-def get_batch_random(batch_size=BATCH_SIZE):
-    items = random.sample(train_tensors, min(batch_size, len(train_tensors)))
-    return torch.stack(items, dim=0).to(DEVICE)
-
-# create learnable patch
-patch = nn.Parameter(torch.rand(3, PATCH_SIZE, PATCH_SIZE, device=DEVICE) * 0.5)
-opt = torch.optim.Adam([patch], lr=LR)
-
-# compute text embeddings
-with torch.no_grad():
-    text_inputs = processor(text=CANDIDATE_TEXTS, return_tensors="pt", padding=True).to(DEVICE)
-    text_embs = model.get_text_features(**text_inputs)
-    text_embs = text_embs / text_embs.norm(dim=-1, keepdim=True)
-
-target_index = CANDIDATE_TEXTS.index(TARGET_TEXT)
-print("\n===============================")
-print(" TRAINING THE ADVERSARIAL PATCH")
-print("===============================\n")
-print("We will optimize a 100x100 patch so that:")
-print(f"- When placed on ANY image → CLIP believes it is \"{TARGET_TEXT}\".")
-print("- Training uses random images and random patch placements.")
-print("- Every iteration increases similarity to the target caption.\n")
-
-pbar = tqdm(range(STEPS))
-for step in pbar:
-    model.zero_grad()
-    imgs = get_batch_random()
-    patched = imgs.clone()
-
-    # apply patch
-    for i in range(patched.size(0)):
-        if PATCH_LOCATION == "random":
-            x = random.randint(0, patched.shape[-1] - PATCH_SIZE)
-            y = random.randint(0, patched.shape[-2] - PATCH_SIZE)
-        else:
-            x = y = 0
-        patched[i, :, y:y+PATCH_SIZE, x:x+PATCH_SIZE] = patch
-
-    inputs = {"pixel_values": patched}
-    image_embs = model.get_image_features(**inputs)
-    image_embs = image_embs / image_embs.norm(dim=-1, keepdim=True)
-
-    sims = image_embs @ text_embs.T
-    target_sim = sims[:, target_index].mean()
-
-    loss = -target_sim + 0.01 * ((patch - patch.detach()).pow(2).mean())
-    loss.backward()
-    opt.step()
-
-    with torch.no_grad():
-        patch.clamp_(0, 1)
-
-    if step % 50 == 0:
-        pbar.set_description(f"Step {step} | Loss: {loss.item():.4f} | TargetSim: {target_sim.item():.4f}")
-
-print("\n Training complete! Saving patch...")
-patch_img = (patch.detach().cpu().numpy().transpose(1,2,0)*255).astype(np.uint8)
-plt.imsave(os.path.join(SAVE_DIR, "universal_patch.png"), patch_img)
-print(" Saved adversarial patch to:", os.path.join(SAVE_DIR, "universal_patch.png"))
-
-# eval helper
-def predict_top1_texts(image_tensors):
-    with torch.no_grad():
-        inputs = {"pixel_values": image_tensors}
-        im_embs = model.get_image_features(**inputs)
-        im_embs = im_embs / im_embs.norm(dim=-1, keepdim=True)
-        sims = (im_embs @ text_embs.T).cpu().numpy()
-        return sims.argmax(axis=1), sims
-
-print("\n===============================")
-print(" EVALUATION ON UNSEEN HOLDOUT IMAGES")
-print("===============================\n")
-
-if len(hold_tensors) == 0:
-    print(" No holdout images found — skipping evaluation.")
-else:
-    print(f"Testing on {len(hold_tensors)} images the model NEVER saw during training.\n")
-
-    batch = torch.stack(hold_tensors, dim=0).to(DEVICE)
-
-    print(" Getting CLIP predictions BEFORE applying patch...")
-    orig_top1, _ = predict_top1_texts(batch)
-
-    print(" Applying patch to holdout images...")
-    patched_batch = batch.clone()
-    for i in range(patched_batch.size(0)):
-        x = random.randint(0, 224 - PATCH_SIZE)
-        y = random.randint(0, 224 - PATCH_SIZE)
-        patched_batch[i, :, y:y+PATCH_SIZE, x:x+PATCH_SIZE] = patch.detach()
-
-    print(" Getting CLIP predictions AFTER applying patch...")
-    patched_top1, _ = predict_top1_texts(patched_batch)
-
-    orig_not_target = (orig_top1 != target_index)
-    became_target = (patched_top1 == target_index)
-    successful = (orig_not_target & became_target)
-    ASR = successful.sum() / len(successful) if successful.sum() > 0 else 0
-
-    print("\n===============================")
-    print("ATTACK SUMMARY")
-    print("===============================\n")
-    print(f"Total holdout images: {len(hold_tensors)}")
-    print(f"Successful targeted attacks: {successful.sum().item()}")
-    print(f"Attack Success Rate (ASR): {ASR*100:.2f}%\n")
-
-    print("Interpretation:")
-    print("- ASR measures how often the patch FORCES CLIP to output the target caption.")
-    print("- A score of 100% means:")
-    print("    Every unseen image was misclassified.")
-    print("    Patch GENERALIZED beyond training data.")
-    print("    The attack is strong and transferable.\n")
-
-    print("Saving visual comparison examples...")
-
-    nshow = min(8, len(hold_tensors))
-    for i in range(nshow):
-        orig = (batch[i].cpu().numpy().transpose(1,2,0)*255).astype(np.uint8)
-        pat = (patched_batch[i].cpu().numpy().transpose(1,2,0)*255).astype(np.uint8)
-
-        fig,axs = plt.subplots(1,2,figsize=(7,3))
-        axs[0].imshow(orig); axs[0].set_title(f"Original:\n{CANDIDATE_TEXTS[orig_top1[i]]}")
-        axs[0].axis("off")
-        axs[1].imshow(pat); axs[1].set_title(f"Patched:\n{CANDIDATE_TEXTS[patched_top1[i]]}")
-        axs[1].axis("off")
-        plt.tight_layout()
-        plt.savefig(os.path.join(SAVE_DIR, f"example_{i}.png"))
-        plt.close(fig)
-
-    print(f"\n Saved example images to: {SAVE_DIR}")
-    print("These images show BEFORE/AFTER predictions with patch applied.\n")
-
-print("===============================")
-print("ATTACK PIPELINE COMPLETE")
-print("===============================")
+if __name__ == "__main__":
+    main()
