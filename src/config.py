@@ -4,9 +4,9 @@ Configuration parameters for cross-modal adversarial attacks.
 import os
 
 class Config:
-    # Data directories
-    DATA_DIR = "data/images"
-    HOLDOUT_DIR = "data/holdout"
+    # Data directories (relative to src/ directory)
+    DATA_DIR = "../data/images"
+    HOLDOUT_DIR = "../data/holdout"
     OUTPUT_DIR = "output"
     RESULTS_DIR = "results"
     RESULTS_IMAGES_DIR = os.path.join("results", "images")

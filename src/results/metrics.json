@@ -1,0 +1,9 @@
+[
+  {
+    "attack": "FGSMAttack",
+    "asr": 0.0,
+    "avg_confidence_shift": -0.03524542227387428,
+    "robustness_score": 1.0,
+    "num_images": 10
+  }
+]
