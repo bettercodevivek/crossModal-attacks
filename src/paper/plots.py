@@ -29,7 +29,8 @@ def plot_asr_bars(results: list, out_path: str, title: str = "Attack Success Rat
     plt.close()
 
 
-def save_results_json(results: list, path: str):
+def save_results_json(results, path: str):
+    """Write list or dict to JSON (used for tables and fast-benchmark metadata)."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)

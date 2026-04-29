@@ -20,6 +20,22 @@ def accuracy(model: nn.Module, loader, device):
     return correct / max(total, 1)
 
 
+@torch.no_grad()
+def accuracy_max_batches(model: nn.Module, loader, device, max_batches: int):
+    """Same metric as `accuracy` but only over the first `max_batches` batches."""
+    model.eval()
+    correct = 0
+    total = 0
+    for bi, (x, y) in enumerate(loader):
+        if bi >= max_batches:
+            break
+        x, y = x.to(device), y.to(device)
+        pred = model(x).argmax(dim=1)
+        correct += pred.eq(y).sum().item()
+        total += y.size(0)
+    return correct / max(total, 1)
+
+
 def evaluate_robustness(
     model: nn.Module,
     loader,

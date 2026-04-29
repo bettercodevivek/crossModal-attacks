@@ -85,6 +85,14 @@ python src/paper/run_paper_experiments.py reproduce-table --defense none
 python src/paper/run_paper_experiments.py reproduce-table --quick --limit_batches 20
 ```
 
+**Fast CNN benchmark (~2–3 minutes, git-friendly JSON + plots):**
+
+```bash
+python src/paper/run_paper_experiments.py fast-benchmark
+```
+
+Writes to **`cnn_paper_benchmark/`** (committed): `table2_asr.json`, `asr_bars.png`, `asr_radar_fgsm_pgd.png`. Model checkpoints still go to **`paper_checkpoints/`** (ignored). Use `--skip_train` if you already have `mnist_none.pt` and `cifar10_none.pt`.
+
 Outputs: `paper_results/table2_asr.json`, `paper_results/asr_bars.png`, `paper_results/asr_radar_fgsm_pgd.png`. Checkpoints go to `paper_checkpoints/`. Torchvision downloads datasets under `data/` (project root).
 
 The **CLIP cross-modal** demos (`demo_attack.py`) remain the multimodal (vision → language) baseline described in the paper’s introduction; the **`paper/`** module matches the **CNN + MNIST/CIFAR** experimental setup in Sections V–VI.

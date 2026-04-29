@@ -7,6 +7,8 @@ import os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CHECKPOINT_DIR = os.path.join(PROJECT_ROOT, "paper_checkpoints")
 RESULTS_DIR = os.path.join(PROJECT_ROOT, "paper_results")
+# Small JSON + PNG artifacts intended for version control (see fast-benchmark command)
+CNN_PAPER_BENCHMARK_DIR = os.path.join(PROJECT_ROOT, "cnn_paper_benchmark")
 
 
 class PaperConfig:
@@ -37,6 +39,15 @@ class PaperConfig:
     # Distillation
     DISTILL_TEMPERATURE = 5.0
     DISTILL_ALPHA = 0.7  # soft loss weight; (1-alpha) for hard CE
+
+    # Fast benchmark (~2–3 min CPU): subset train + shallow PGD + few eval batches
+    FAST_BATCH_SIZE = 256
+    FAST_TRAIN_EPOCHS = 1
+    FAST_TRAIN_SUBSET_MNIST = 8_000
+    FAST_TRAIN_SUBSET_CIFAR = 5_000
+    FAST_TRAIN_EPOCHS_CIFAR = 2  # slightly more than MNIST so CIFAR is usable in plots
+    FAST_EVAL_MAX_BATCHES = 4
+    FAST_PGD_STEPS = 5
 
     @staticmethod
     def ensure_dirs():

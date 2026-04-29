@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "benchmark": "cnn_fast",
+    "note": "Quick CNN benchmark for papers/CI; subset training and capped eval batches \u2014 not full-test ASR.",
+    "train_epochs_mnist": 1,
+    "train_epochs_cifar10": 2,
+    "train_subset_mnist": 8000,
+    "train_subset_cifar10": 5000,
+    "eval_max_batches": 4,
+    "batch_size": 256,
+    "pgd_steps_eval": 5,
+    "epsilon_fgsm_pgd": 0.03,
+    "device": "cpu",
+    "clean_accuracy_eval_subset": {
+      "mnist": 0.8936,
+      "cifar10": 0.4414
+    }
+  },
+  "results": [
+    {
+      "dataset": "mnist",
+      "attack": "fgsm",
+      "asr_percent": 15.92,
+      "robustness_score": 0.8408,
+      "evaluated_samples": 1024
+    },
+    {
+      "dataset": "mnist",
+      "attack": "pgd",
+      "asr_percent": 16.21,
+      "robustness_score": 0.8379,
+      "evaluated_samples": 1024
+    },
+    {
+      "dataset": "cifar10",
+      "attack": "fgsm",
+      "asr_percent": 88.28,
+      "robustness_score": 0.1172,
+      "evaluated_samples": 1024
+    },
+    {
+      "dataset": "cifar10",
+      "attack": "pgd",
+      "asr_percent": 91.02,
+      "robustness_score": 0.0898,
+      "evaluated_samples": 1024
+    }
+  ]
+}
