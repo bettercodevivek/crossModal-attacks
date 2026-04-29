@@ -1,38 +1,95 @@
 # Cross-Modal Adversarial Attacks
 
-A comprehensive robustness testing framework for multimodal models (CLIP) implementing cross-modal adversarial attacks as described in "Cross-Modal Adversarial Attacks: Towards Generalized Robustness Testing in Deep Learning".
+A comprehensive robustness testing framework for the paper *Cross-Modal Adversarial Attacks: Towards Generalized Robustness Testing in Deep Learning*: **CLIP** cross-modal attacks (vision → language) plus **paper Section V–VI** baselines (MNIST/CIFAR-10 CNNs, FGSM/PGD/CW, ASR, adversarial training, distillation).
 
 ## Overview
 
-This framework implements multiple adversarial attack methods that perturb images to manipulate text-based predictions in CLIP, demonstrating cross-modal vulnerability in vision-language models.
+**CLIP path** (`demo_attack.py`): adversarial methods that perturb images to change text-side behavior (similarity to a target caption), illustrating shared-embedding vulnerability.
+
+**Paper CNN path** (`src/paper/`): the MNIST and CIFAR-10 experiments with classification-focused FGSM, PGD, optional Carlini–Wagner–style L2 attack, robustness metrics, and defenses—matching the empirical methodology described in Sections V–VI.
 
 ## Project Structure
 
 ```
 src/
-├── demo_attack.py          # Main script for running attacks
-├── config.py              # Configuration parameters
+├── demo_attack.py          # CLIP cross-modal attacks (main script)
+├── config.py              # CLIP / patch / PGD config
 ├── utils.py               # Utility functions
 │
-├── attacks/               # Attack implementations
+├── paper/                 # Paper Sec. V–VI: MNIST/CIFAR CNN, FGSM/PGD/CW, defenses
+│   ├── run_paper_experiments.py
+│   ├── models.py
+│   ├── data.py
+│   ├── classification_attacks.py
+│   ├── cw_attack.py
+│   ├── train_models.py
+│   ├── metrics_classify.py
+│   ├── plots.py
+│   └── paper_config.py
+│
+├── attacks/               # CLIP attack implementations
 │   ├── __init__.py
 │   ├── patch_attack.py    # Universal adversarial patch
 │   ├── fgsm_attack.py     # Fast Gradient Sign Method
 │   └── pgd_attack.py      # Projected Gradient Descent
 │
-├── evaluation/            # Evaluation modules
+├── evaluation/            # CLIP evaluation modules
 │   ├── __init__.py
-│   ├── metrics.py         # Evaluation metrics (ASR, confidence shift, robustness)
-│   └── robustness_evaluator.py  # Robustness evaluation pipeline
+│   ├── metrics.py         # Similarity-based ASR, confidence shift, robustness
+│   └── robustness_evaluator.py
 │
-├── visualization/         # Visualization tools
+├── visualization/
 │   ├── __init__.py
-│   └── visualize_results.py  # Generate comparison visualizations
+│   └── visualize_results.py
 │
-└── results/               # Output directory
-    ├── images/            # Visualization outputs
-    └── metrics.json       # Evaluation metrics
+└── results/               # CLIP run outputs
+    ├── images/
+    └── metrics.json
 ```
+
+At the repo root, `paper_checkpoints/` and `paper_results/` are created by the paper CLI.
+
+## Paper-aligned experiments (MNIST / CIFAR-10 CNNs)
+
+Section VI of *Cross-Modal Adversarial Attacks: Towards Generalized Robustness Testing in Deep Learning* reports **white-box FGSM/PGD** on **CNN classifiers** trained on **MNIST** and **CIFAR-10**, with **attack success rate (ASR)** and **robustness** \(R = 1 - \mathrm{ASR}\). That pipeline is implemented under `src/paper/`:
+
+| Component | Location |
+|-----------|----------|
+| MNIST CNN / deeper CIFAR-10 CNN | `src/paper/models.py` |
+| FGSM, PGD (\(L_\infty\)), CW-style L2 | `src/paper/classification_attacks.py`, `src/paper/cw_attack.py` |
+| Metrics (ASR, \(R\)) | `src/paper/metrics_classify.py` |
+| Standard training, adversarial training, defensive distillation | `src/paper/train_models.py` |
+| CLI | `src/paper/run_paper_experiments.py` |
+
+**Train** a classifier (optional defenses: `none`, `adversarial`, `distillation`):
+
+```bash
+# From project root
+python src/paper/run_paper_experiments.py train --dataset mnist --defense none
+python src/paper/run_paper_experiments.py train --dataset cifar10 --defense adversarial
+python src/paper/run_paper_experiments.py train --dataset mnist --defense distillation --teacher_ckpt paper_checkpoints/mnist_none.pt
+```
+
+**Evaluate** FGSM, PGD, or CW on a saved checkpoint:
+
+```bash
+python src/paper/run_paper_experiments.py eval --dataset mnist --checkpoint paper_checkpoints/mnist_none.pt --attack fgsm
+python src/paper/run_paper_experiments.py eval --dataset mnist --checkpoint paper_checkpoints/mnist_none.pt --attack pgd
+python src/paper/run_paper_experiments.py eval --dataset mnist --checkpoint paper_checkpoints/mnist_none.pt --attack cw --limit_batches 10
+```
+
+**Reproduce Table 2–style ASR** (trains MNIST + CIFAR unless checkpoints exist; use `--quick` for a short run):
+
+```bash
+python src/paper/run_paper_experiments.py reproduce-table --defense none
+python src/paper/run_paper_experiments.py reproduce-table --quick --limit_batches 20
+```
+
+Outputs: `paper_results/table2_asr.json`, `paper_results/asr_bars.png`, `paper_results/asr_radar_fgsm_pgd.png`. Checkpoints go to `paper_checkpoints/`. Torchvision downloads datasets under `data/` (project root).
+
+The **CLIP cross-modal** demos (`demo_attack.py`) remain the multimodal (vision → language) baseline described in the paper’s introduction; the **`paper/`** module matches the **CNN + MNIST/CIFAR** experimental setup in Sections V–VI.
+
+---
 
 ## Features
 

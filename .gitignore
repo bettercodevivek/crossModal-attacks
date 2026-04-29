@@ -157,6 +157,10 @@ venv.bak/
 /data
 
 /output
+
+# Paper reproduction (MNIST/CIFAR checkpoints and plots)
+/paper_checkpoints/
+/paper_results/
 # mypy
 .mypy_cache/
 .dmypy.json
