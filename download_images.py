@@ -1,89 +1,122 @@
 """
-Simple script to download test images for cross-modal adversarial attacks.
+Download sample images for cross-modal adversarial attacks.
 
-This script downloads multiple images from Unsplash Source API and saves them
-to the appropriate directories for training and evaluation.
+Uses Lorem Picsum (https://picsum.photos/) — reliable, no API key.
+(Unsplash Source URLs were removed / often return 503.)
 
 Usage:
     python download_images.py
 """
-import requests
 import os
-from pathlib import Path
+
+import requests
+
+PICSUM_BASE = "https://picsum.photos/id/{pic_id}/{w}/{h}"
+
+
+def _download_one(session: requests.Session, url: str, timeout: float = 25.0) -> bytes:
+    r = session.get(url, timeout=timeout, allow_redirects=True)
+    r.raise_for_status()
+    if len(r.content) < 512:
+        raise ValueError("response too small")
+    return r.content
+
+
+def _picsum_url(seed_index: int, slot: int, w: int = 800, h: int = 600) -> str:
+    """Deterministic image id in [0, 999] — spreads picks across the catalog."""
+    pic_id = (seed_index * 47 + slot * 19 + seed_index * slot * 3) % 1000
+    return PICSUM_BASE.format(pic_id=pic_id, w=w, h=h)
+
 
 def download_images(num_training=30, num_evaluation=10):
     """
-    Download multiple test images from Unsplash Source API.
-    
-    Args:
-        num_training: Number of training images to download (default: 30)
-        num_evaluation: Number of evaluation images to download (default: 10)
+    Download JPEGs from Lorem Picsum into data/images/ and data/holdout/.
     """
-    
-    # Create directories
     os.makedirs("data/images", exist_ok=True)
     os.makedirs("data/holdout", exist_ok=True)
-    
-    # Diverse keywords for varied image content
-    keywords = [
-        "dog", "cat", "car", "building", "nature", "food", "person", "animal", 
-        "landscape", "city", "beach", "mountain", "forest", "bird", "flower",
-        "sunset", "ocean", "tree", "sky", "street", "house", "bridge", "river"
-    ]
-    
+
     print("=" * 60)
-    print("Downloading Test Images for Cross-Modal Adversarial Attacks")
+    print("Downloading test images (Lorem Picsum)")
     print("=" * 60)
+
+    session = requests.Session()
+    session.headers.setdefault(
+        "User-Agent",
+        "crossModal-attacks/download_images (educational; contact: local)",
+    )
+
     print(f"\nDownloading {num_training} training images to data/images/...")
-    
-    # Download training images
-    success_count = 0
+    ok_train = 0
     for i in range(num_training):
-        keyword = keywords[i % len(keywords)]
-        url = f"https://source.unsplash.com/800x600/?{keyword}"
+        url = _picsum_url(i, slot=0)
         try:
-            response = requests.get(url, timeout=15, allow_redirects=True)
-            response.raise_for_status()
-            filepath = f"data/images/img_{i+1}.jpg"
-            with open(filepath, 'wb') as f:
-                f.write(response.content)
-            print(f"  ✓ [{i+1}/{num_training}] Downloaded {filepath} (keyword: {keyword})")
-            success_count += 1
+            data = _download_one(session, url)
+            path = f"data/images/img_{i + 1}.jpg"
+            with open(path, "wb") as f:
+                f.write(data)
+            print(f"  [ok] [{i + 1}/{num_training}] {path}")
+            ok_train += 1
         except Exception as e:
-            print(f"  ✗ [{i+1}/{num_training}] Failed to download: {e}")
-    
-    print(f"\n✓ Training images: {success_count}/{num_training} downloaded successfully")
-    
-    print(f"\nDownloading {num_evaluation} evaluation images to data/holdout/...")
-    
-    # Download evaluation images
-    success_count = 0
+            # Retry with alternate offsets if one id is missing
+            fallback = False
+            for bump in range(1, 25):
+                url2 = _picsum_url(i + bump * 31, slot=bump)
+                try:
+                    data = _download_one(session, url2)
+                    path = f"data/images/img_{i + 1}.jpg"
+                    with open(path, "wb") as f:
+                        f.write(data)
+                    print(f"  [ok] [{i + 1}/{num_training}] {path}  (fallback #{bump})")
+                    ok_train += 1
+                    fallback = True
+                    break
+                except Exception:
+                    continue
+            if not fallback:
+                print(f"  [fail] [{i + 1}/{num_training}] {e}")
+
+    print(f"\nTraining images: {ok_train}/{num_training} OK")
+
+    print(f"\nDownloading {num_evaluation} holdout images to data/holdout/...")
+    ok_eval = 0
     for i in range(num_evaluation):
-        keyword = keywords[(i + 15) % len(keywords)]  # Use different keywords
-        url = f"https://source.unsplash.com/800x600/?{keyword}"
+        # Different slot than training so holdout != training picks
+        url = _picsum_url(i, slot=50)
         try:
-            response = requests.get(url, timeout=15, allow_redirects=True)
-            response.raise_for_status()
-            filepath = f"data/holdout/img_{i+1}.jpg"
-            with open(filepath, 'wb') as f:
-                f.write(response.content)
-            print(f"  ✓ [{i+1}/{num_evaluation}] Downloaded {filepath} (keyword: {keyword})")
-            success_count += 1
+            data = _download_one(session, url)
+            path = f"data/holdout/img_{i + 1}.jpg"
+            with open(path, "wb") as f:
+                f.write(data)
+            print(f"  [ok] [{i + 1}/{num_evaluation}] {path}")
+            ok_eval += 1
         except Exception as e:
-            print(f"  ✗ [{i+1}/{num_evaluation}] Failed to download: {e}")
-    
-    print(f"\n✓ Evaluation images: {success_count}/{num_evaluation} downloaded successfully")
-    
+            fallback = False
+            for bump in range(1, 25):
+                url2 = _picsum_url(i + bump * 29 + 100, slot=50 + bump)
+                try:
+                    data = _download_one(session, url2)
+                    path = f"data/holdout/img_{i + 1}.jpg"
+                    with open(path, "wb") as f:
+                        f.write(data)
+                    print(f"  [ok] [{i + 1}/{num_evaluation}] {path}  (fallback #{bump})")
+                    ok_eval += 1
+                    fallback = True
+                    break
+                except Exception:
+                    continue
+            if not fallback:
+                print(f"  [fail] [{i + 1}/{num_evaluation}] {e}")
+
+    print(f"\nHoldout images: {ok_eval}/{num_evaluation} OK")
+
     print("\n" + "=" * 60)
-    print("Download Complete!")
+    print("Done.")
     print("=" * 60)
-    print(f"\nTraining images saved to: data/images/ ({num_training} images)")
-    print(f"Evaluation images saved to: data/holdout/ ({num_evaluation} images)")
-    print("\nYou can now run the attacks:")
+    print(f"\nTraining: data/images/   Holdout: data/holdout/")
+    print("\nExample:")
     print("  cd src")
     print("  python demo_attack.py --attack fgsm")
-    print("  python demo_attack.py --attack pgd")
-    print("  python demo_attack.py --attack patch")
+
 
 if __name__ == "__main__":
     try:
@@ -92,6 +125,4 @@ if __name__ == "__main__":
         print("\n\nDownload interrupted by user.")
     except Exception as e:
         print(f"\n\nError: {e}")
-        print("\nMake sure you have 'requests' installed:")
-        print("  pip install requests")
-
+        print("\nInstall requests if needed:  pip install requests")

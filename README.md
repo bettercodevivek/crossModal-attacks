@@ -175,7 +175,7 @@ data/
 └── holdout/    ← 10 images used to evaluate all CLIP attacks
 ```
 
-Images are sourced from Unsplash (free, no API key required). Supported formats: `.jpg`, `.jpeg`, `.png`, `.bmp`.
+Images are sourced from [Lorem Picsum](https://picsum.photos/) (free, no API key). Supported formats: `.jpg`, `.jpeg`, `.png`, `.bmp`.
 
 > The CNN experiments (Track 2) download MNIST and CIFAR-10 automatically via torchvision — no manual download needed.
 

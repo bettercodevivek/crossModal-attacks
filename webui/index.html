@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cross-modal attack demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <div class="hero-sticker">Robustness tooling</div>
+      <h1 class="hero-title">Cross-modal attacks</h1>
+      <p class="lead">
+        Push pixels until CLIP buys your caption. Tab two runs the paper CNN track on MNIST / CIFAR-10.
+      </p>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="clip">
+        01 — CLIP
+      </button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="paper">
+        02 — CNN eval
+      </button>
+    </nav>
+
+    <section id="panel-clip" class="tab-panel" role="tabpanel">
+      <section class="panel">
+        <form id="form">
+          <div class="row">
+            <label class="file">
+              <span>Image</span>
+              <input type="file" id="file" name="image" accept="image/*" />
+            </label>
+            <label>
+              <span>Attack</span>
+              <select id="attack" name="attack">
+                <option value="fgsm">FGSM</option>
+                <option value="pgd">PGD</option>
+              </select>
+            </label>
+          </div>
+          <p id="preset-label" class="preset-label hidden"></p>
+          <label class="full">
+            <span>Target caption</span>
+            <input type="text" id="target_text" name="target_text" placeholder="e.g. a photo of a banana" value="a photo of a banana" required />
+          </label>
+          <aside class="callout callout-a" aria-label="What the caption does">
+            <strong>Caption</strong>
+            It is the <em>text you want the image to “look like” to CLIP</em>. The attack nudges pixels so the model’s image–text score for <strong>this exact sentence</strong> goes up — even if the picture still looks like a dog or a car to you. It is the <em>goal</em> of the cross-modal attack, not a label of what is really in the photo.
+          </aside>
+          <div class="row toggles">
+            <label>
+              <span>Epsilon ε (perturbation budget)</span>
+              <input type="number" id="epsilon" step="0.005" min="0.001" max="0.2" placeholder="use default" />
+            </label>
+            <label id="pgd_wrap" class="hidden">
+              <span>PGD steps</span>
+              <input type="number" id="pgd_steps" step="1" min="1" max="200" placeholder="default" />
+            </label>
+            <label id="alpha_wrap" class="hidden">
+              <span>PGD α</span>
+              <input type="number" id="pgd_alpha" step="0.001" min="0.0001" max="0.1" placeholder="default" />
+            </label>
+          </div>
+          <aside class="callout callout-b" aria-label="What epsilon means">
+            <strong>Epsilon</strong>
+            It is the <em>max strength of each pixel tweak</em> (in image units 0–1). Smaller ε → subtler noise, harder for the attack to push similarity to your caption. Larger ε → stronger attack, but the image may look more distorted. Leave blank to use the project default.
+          </aside>
+          <button type="submit" id="submit" class="btn-brut btn-brut-primary">
+            Run attack
+          </button>
+        </form>
+        <p id="hint" class="hint"></p>
+      </section>
+
+      <section class="panel gallery-panel">
+        <h2 class="panel-title">Sample images</h2>
+        <p class="gallery-help">
+          Click a thumbnail to use <code>data/holdout</code> or <code>data/images</code> without uploading.
+          Run <code>python download_images.py</code> from the project root if folders are empty.
+        </p>
+        <div id="gallery-note" class="hint"></div>
+        <div class="gallery-section">
+          <h3 class="gallery-heading">Holdout (<code>data/holdout</code>)</h3>
+          <div id="gallery-holdout" class="gallery-grid"></div>
+        </div>
+        <div class="gallery-section">
+          <h3 class="gallery-heading">Training pool (<code>data/images</code>)</h3>
+          <div id="gallery-images" class="gallery-grid"></div>
+        </div>
+        <button type="button" class="btn-secondary" id="clear-preset">Clear sample selection</button>
+      </section>
+    </section>
+
+    <section id="panel-paper" class="tab-panel hidden" role="tabpanel">
+      <section class="panel">
+        <form id="paper-form">
+          <div class="row">
+            <label>
+              <span>Dataset</span>
+              <select id="paper_dataset" required>
+                <option value="mnist">MNIST</option>
+                <option value="cifar10">CIFAR-10</option>
+              </select>
+            </label>
+            <label class="grow">
+              <span>Checkpoint (.pt)</span>
+              <select id="paper_checkpoint" required></select>
+            </label>
+          </div>
+          <div class="row">
+            <label>
+              <span>Attack</span>
+              <select id="paper_attack" required>
+                <option value="fgsm">FGSM</option>
+                <option value="pgd">PGD</option>
+                <option value="cw">CW (L2)</option>
+              </select>
+            </label>
+            <label>
+              <span>Limit batches</span>
+              <input type="number" id="paper_limit" min="1" max="500" value="5" placeholder="full test set if empty" />
+            </label>
+          </div>
+          <p class="hint paper-hint">
+            Limit batches caps how much of the test loader is attacked (recommended for demos). Omit or raise for full evaluation (slow).
+          </p>
+          <div class="row toggles">
+            <label>
+              <span>ε (FGSM/PGD)</span>
+              <input type="number" id="paper_epsilon" step="0.005" min="0.001" max="1" placeholder="paper default" />
+            </label>
+            <label id="paper_pgd_steps_wrap">
+              <span>PGD steps</span>
+              <input type="number" id="paper_pgd_steps" min="1" max="500" placeholder="default" />
+            </label>
+            <label id="paper_pgd_alpha_wrap">
+              <span>PGD α</span>
+              <input type="number" id="paper_pgd_alpha" step="0.001" min="0.0001" max="1" placeholder="default" />
+            </label>
+          </div>
+          <div id="paper_cw_wrap" class="row toggles hidden">
+            <label>
+              <span>CW steps</span>
+              <input type="number" id="paper_cw_steps" min="1" max="500" placeholder="default" />
+            </label>
+            <label>
+              <span>CW lr</span>
+              <input type="number" id="paper_cw_lr" step="0.001" placeholder="default" />
+            </label>
+            <label>
+              <span>CW c</span>
+              <input type="number" id="paper_cw_c" step="0.1" placeholder="default" />
+            </label>
+          </div>
+          <button type="submit" id="paper-submit" class="btn-brut btn-brut-secondary">
+            Run evaluation
+          </button>
+        </form>
+        <p id="paper-hint" class="hint"></p>
+      </section>
+
+      <section id="paper-results" class="results hidden">
+        <h2 class="section-title">CNN evaluation results</h2>
+        <div class="metrics" id="paper-metrics"></div>
+      </section>
+    </section>
+
+    <div id="loading" class="loading-overlay hidden" aria-live="polite">
+      <div class="loading-card">
+        <div class="spinner-brut" aria-hidden="true"></div>
+        <p id="loading-text" class="loading-title">Working…</p>
+      </div>
+    </div>
+
+    <section id="error" class="error toast hidden"></section>
+
+    <section id="results" class="results hidden">
+      <h2 class="section-title">CLIP output</h2>
+      <div class="metrics" id="metrics"></div>
+      <div class="images compare-strip">
+        <figure class="shot shot-before">
+          <div class="shot-badge">Before</div>
+          <div class="shot-frame">
+            <img id="img_orig" alt="Original" />
+          </div>
+          <figcaption>Original input</figcaption>
+        </figure>
+        <div class="vs-pillar" aria-hidden="true">→</div>
+        <figure class="shot shot-after">
+          <div class="shot-badge shot-badge-adv">After attack</div>
+          <div class="shot-frame shot-frame-adv">
+            <img id="img_adv" alt="Adversarial" />
+          </div>
+          <figcaption>Adversarial image</figcaption>
+        </figure>
+      </div>
+    </section>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
